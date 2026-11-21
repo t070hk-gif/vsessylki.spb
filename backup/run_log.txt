@@ -30614,3 +30614,4 @@
 21.11 18:30:00 запуск health_check.py
 21.11 18:30:00 запуск post_standings.py
 21.11 18:30:00 запуск live_watcher.py
+21.11 18:31:00 запуск live_watcher.py
