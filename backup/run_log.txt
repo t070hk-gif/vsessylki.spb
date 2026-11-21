@@ -30433,3 +30433,5 @@
 21.11 16:08:00 запуск live_watcher.py
 21.11 16:09:00 запуск live_watcher.py
 21.11 16:27:00 пропуск live_watcher.py: синхронизация 1066 с назад
+21.11 16:28:00 запуск live_watcher.py
+21.11 16:28:00 запуск post_schedule.py
