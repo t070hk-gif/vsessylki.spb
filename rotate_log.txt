@@ -1,0 +1,2 @@
+25.10 04:10 schedule_log.txt: 188 МБ -> logs_archive/schedule_log_20261025.txt.gz
+27.10 04:10 schedule_log.txt: 11 МБ -> logs_archive/schedule_log_20261027.txt.gz
