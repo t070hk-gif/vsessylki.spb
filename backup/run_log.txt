@@ -30310,3 +30310,4 @@
 21.11 14:30:00 запуск live_watcher.py
 21.11 14:30:00 запуск post_schedule.py
 21.11 14:30:00 запуск post_standings.py
+21.11 14:31:00 запуск live_watcher.py
