@@ -1,16 +1,16 @@
 vk_tokens.json
 *token*.json
-state.json
+# state.json
 posted_days.json
 standings_state.json
-video_index.json
+# video_index.json
 official_*.json
 *_cache.json
 admin_*.json
 team_logos.json
 live_*.json
 *.lock
-*_log.txt
+# *_log.txt
 *.log
 *.log.*
 logs_archive/
