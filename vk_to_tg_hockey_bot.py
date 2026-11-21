@@ -247,23 +247,95 @@ def get_valid_access_token(tokens: dict) -> tuple:
     return tokens["access_token"], tokens
 
 
+
+# === stability: единый VK-запрос с retry ===
+_VK_TOKENS_REF = {"tokens": None}  # обновляется из main/check_groups
+
+
+def _vk_api(method: str, params: dict, access_token: str, *,
+            group_id=None, attempts: int = 4):
+    """Запрос к VK API с обработкой error 5 (auth) и 6 (rate limit).
+
+    Возвращает (data_dict | None, new_access_token).
+    None в data = фатальная/невосстановимая ошибка для этого вызова.
+    """
+    import time as _time
+    token = access_token
+    last_data = None
+    label = f"group {group_id}" if group_id is not None else method
+
+    for attempt in range(attempts):
+        try:
+            resp = requests.get(
+                f"https://api.vk.com/method/{method}",
+                params={**params, "access_token": token, "v": VK_API_VERSION},
+                timeout=(5, 20),
+            )
+            data = resp.json()
+        except requests.exceptions.RequestException as e:
+            wait = min(2 ** attempt, 12)
+            print(f"[VK net] {label} {method}: {e}; sleep {wait}s")
+            _time.sleep(wait)
+            continue
+
+        err = data.get("error") or {}
+        code = err.get("error_code")
+        if not err:
+            return data, token
+
+        last_data = data
+        if code == 6:  # Too many requests
+            wait = min(2 ** attempt, 15)
+            print(f"[VK rate] {label}: error 6, sleep {wait}s (attempt {attempt+1})")
+            _time.sleep(wait)
+            continue
+
+        if code == 5:  # User authorization failed
+            print(f"[VK auth] {label}: error 5 — пробую refresh токена")
+            try:
+                tokens = _VK_TOKENS_REF.get("tokens") or load_tokens()
+                tokens = refresh_access_token(tokens)
+                _VK_TOKENS_REF["tokens"] = tokens
+                token = tokens["access_token"]
+                _time.sleep(1.0)
+                continue
+            except SystemExit as e:
+                print(f"[VK auth] refresh не удался: {e}")
+                try:
+                    notify_admin_once(
+                        "vk_token_dead",
+                        "⚠️ VK-токен не обновляется (error 5). "
+                        "Запусти get_vk_token.py на компьютере.",
+                    )
+                except Exception:
+                    pass
+                return data, token
+            except Exception as e:
+                print(f"[VK auth] refresh exception: {e}")
+                return data, token
+
+        # 10, 204 и прочее — один повтор с паузой, потом сдаёмся
+        if attempt < attempts - 1 and code in (10, 204, 15):
+            _time.sleep(1.5 * (attempt + 1))
+            continue
+        print(f"[VK API error - {method}] {label}: {err}")
+        return data, token
+
+    if last_data and "error" in last_data:
+        print(f"[VK API error - {method}] {label}: {last_data['error']}")
+    return last_data, token
+
 # ------------------- VK API -------------------
 
 def vk_get_wall_posts(access_token: str, group_id: int, count: int = POSTS_PER_CHECK) -> list:
-    """Получить последние посты со стены группы ВК."""
-    resp = requests.get(
-        "https://api.vk.com/method/wall.get",
-        params={
-            "owner_id": -abs(group_id),
-            "count": count,
-            "access_token": access_token,
-            "v": VK_API_VERSION,
-        },
-        timeout=15,
+    """Получить последние посты со стены группы ВК (с retry / refresh)."""
+    data, _ = _vk_api(
+        "wall.get",
+        {"owner_id": -abs(group_id), "count": count},
+        access_token,
+        group_id=group_id,
     )
-    data = resp.json()
-    if "error" in data:
-        print(f"[VK API error] group {group_id}: {data['error']}")
+    if not data or "error" in data:
         return []
     return data.get("response", {}).get("items", [])
 
@@ -288,19 +360,35 @@ def vk_videos_still_exist(access_token: str, video_refs: list) -> set:
         return set()
 
     videos_param = ",".join(f"{owner_id}_{vid}" for owner_id, vid in video_refs)
-    for attempt in range(3):
-        time.sleep(0.4)                     # VK: не больше 3 запросов в секунду
-        resp = requests.get(
-            "https://api.vk.com/method/video.get",
-            params={"videos": videos_param, "access_token": access_token, "v": VK_API_VERSION},
-            timeout=15,
-        )
-        data = resp.json()
-        if data.get("error", {}).get("error_code") == 6:      # Too many requests per second
-            time.sleep(1.5 * (attempt + 1))
+    data = None
+    for attempt in range(4):
+        time.sleep(0.45)
+        try:
+            resp = requests.get(
+                "https://api.vk.com/method/video.get",
+                params={"videos": videos_param, "access_token": access_token, "v": VK_API_VERSION},
+                timeout=(5, 20),
+            )
+            data = resp.json()
+        except requests.exceptions.RequestException as e:
+            time.sleep(min(2 ** attempt, 10))
             continue
+        code = (data.get("error") or {}).get("error_code")
+        if code == 6:
+            time.sleep(min(2 ** attempt, 15))
+            continue
+        if code == 5:
+            try:
+                tokens = _VK_TOKENS_REF.get("tokens") or load_tokens()
+                tokens = refresh_access_token(tokens)
+                _VK_TOKENS_REF["tokens"] = tokens
+                access_token = tokens["access_token"]
+                time.sleep(1.0)
+                continue
+            except Exception:
+                break
         break
-    if "error" in data:
+    if not data or "error" in data:
         print(f"[VK API error - проверка удалённых видео] {data['error']}")
         # При ошибке API лучше НЕ считать видео удалёнными (безопаснее
         # ничего не удалить, чем удалить существующий пост по ошибке).
@@ -312,30 +400,16 @@ def vk_videos_still_exist(access_token: str, video_refs: list) -> set:
 
 def vk_get_group_videos(access_token: str, group_id: int, count: int = VIDEO_CATALOG_PER_CHECK):
     """
-    Получить видео-каталог группы напрямую (video.get), а не только то, что
-    прикреплено к постам на стене. Некоторые группы публикуют прямые
-    трансляции через нативный механизм ВК ("Трансляции"), не создавая при
-    этом отдельного поста на стене — такие видео wall.get не увидит вообще,
-    а video.get — увидит, так как они всё равно попадают в общий каталог
-    видео группы.
-
-    Возвращает None (а не пустой список) при ошибке API — это важно
-    отличать от "каталог реально пуст", иначе базовая линия могла бы
-    ошибочно "засчитаться" ещё до того, как доступ к каталогу появился.
+    Получить видео-каталог группы напрямую (video.get).
+    Возвращает None при ошибке API (чтобы не ставить baseline по ошибке).
     """
-    resp = requests.get(
-        "https://api.vk.com/method/video.get",
-        params={
-            "owner_id": -abs(group_id),
-            "count": count,
-            "access_token": access_token,
-            "v": VK_API_VERSION,
-        },
-        timeout=15,
+    data, _ = _vk_api(
+        "video.get",
+        {"owner_id": -abs(group_id), "count": count},
+        access_token,
+        group_id=group_id,
     )
-    data = resp.json()
-    if "error" in data:
-        print(f"[VK API error - video.get] group {group_id}: {data['error']}")
+    if not data or "error" in data:
         return None
     return data.get("response", {}).get("items", [])
 
@@ -1386,6 +1460,42 @@ def register_video_in_index(parsed: dict, video: dict) -> None:
 
 # ------------------------- ОСНОВНОЙ ЦИКЛ -------------------------
 
+
+PENDING_MAX_AGE_DAYS = 14
+
+
+def _cleanup_stale_pending(state: dict) -> None:
+    """Удаляет из _pending_friendly_matches записи старше PENDING_MAX_AGE_DAYS."""
+    pending = state.get("_pending_friendly_matches") or {}
+    if not pending:
+        return
+    now = time.time()
+    date_re = re.compile(r"(\d{1,2})\.(\d{1,2})\.(\d{2,4})")
+    removed = []
+    for vid, entry in list(pending.items()):
+        text_e = f"{entry.get('title', '')} {entry.get('description', '')}"
+        m = date_re.search(text_e)
+        ts = None
+        if m:
+            d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            if y < 100:
+                y += 2000
+            try:
+                ts = datetime(y, mo, d).timestamp()
+            except ValueError:
+                ts = None
+        if ts is None:
+            ts = float(entry.get("first_seen") or entry.get("added_at") or 0) or now
+        age_days = (now - ts) / 86400
+        if age_days > PENDING_MAX_AGE_DAYS:
+            removed.append(vid)
+            del pending[vid]
+    if removed:
+        print(f"[CLEAN] Удалены старые pending ({len(removed)}): {', '.join(removed[:8])}"
+              + ("…" if len(removed) > 8 else ""))
+        state["_pending_friendly_matches"] = pending
+        save_state(state)
+
 def process_pending_friendly_matches(state: dict) -> None:
     """
     Публикует отложенные ранее товарищеские игры (см. _is_today_or_past),
@@ -1826,9 +1936,48 @@ def _sweep_unplaced(state: dict, group_id: int, unique_videos: dict, seen_ids: s
         save_state(state)
 
 
+
+def _normalize_video_index_dates() -> int:
+    """Приводит ключи video_index к DD.MM.YYYY (с ведущим нулём)."""
+    path = Path(__file__).parent / "video_index.json"
+    if not path.exists():
+        return 0
+    try:
+        vi = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return 0
+    changed = 0
+    bad_re = re.compile(r"^(\d{1,2})\.(\d{1,2})\.(\d{4})(::.*)?$")
+    new_vi = {}
+    for k, v in vi.items():
+        m = bad_re.match(k)
+        if m:
+            d, mo, y, rest = m.group(1), m.group(2), m.group(3), m.group(4) or ""
+            nk = f"{int(d):02d}.{int(mo):02d}.{y}{rest}"
+            if nk != k:
+                changed += 1
+                if nk in new_vi or nk in vi:
+                    new_vi[k] = v
+                else:
+                    new_vi[nk] = v
+                continue
+        new_vi[k] = v
+    if changed:
+        path.write_text(json.dumps(new_vi, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"[CLEAN] video_index: нормализовано дат: {changed}")
+    return changed
+
 def check_groups_once(state: dict, access_token: str) -> None:
     # Сначала публикуем товарищеские игры, для которых наступил день матча
     # (были отложены раньше — см. process_pending_friendly_matches).
+    today = datetime.now().strftime("%d.%m.%Y")
+    if state.get("_video_index_norm_day") != today:
+        try:
+            _normalize_video_index_dates()
+        except Exception as e:
+            print(f"[WARN] normalize video_index: {e}")
+        state["_video_index_norm_day"] = today
+    _cleanup_stale_pending(state)
     process_pending_friendly_matches(state)
     _recheck_unresolved(state)
     _send_unresolved_digest(state)
@@ -1850,7 +1999,9 @@ def check_groups_once(state: dict, access_token: str) -> None:
     # поста дня (см. ниже, после основного цикла по группам).
     all_seen_video_ids_this_run = set()
 
-    for group_id in VK_GROUP_IDS:
+    for gi, group_id in enumerate(VK_GROUP_IDS):
+        if gi > 0:
+            time.sleep(0.55)  # stability: не бить VK подряд по всем группам
         key = str(group_id)
         seen_video_ids = set(state.get(key, []))
 
@@ -2282,6 +2433,7 @@ def main() -> None:
 
     if "--once" in sys.argv:                 # облако: один проход и выход
         access_token, tokens = get_valid_access_token(tokens)
+        _VK_TOKENS_REF["tokens"] = tokens
         process_admin_messages(admin_state, access_token)
         check_groups_once(state, access_token)
         return
@@ -2292,6 +2444,7 @@ def main() -> None:
             continue
         try:
             access_token, tokens = get_valid_access_token(tokens)
+            _VK_TOKENS_REF["tokens"] = tokens
             process_admin_messages(admin_state, access_token)
 
             if seconds_since_vk_check >= POLL_INTERVAL_SECONDS:

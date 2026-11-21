@@ -33,6 +33,30 @@ from pathlib import Path
 
 import requests
 
+# stability: session с retry для внешних сайтов
+def _http_session():
+    from requests.adapters import HTTPAdapter
+    from urllib3.util.retry import Retry
+    s = requests.Session()
+    retry = Retry(
+        total=3,
+        backoff_factor=1.2,
+        status_forcelist=(502, 503, 504),
+        allowed_methods=frozenset(["GET", "POST"]),
+        raise_on_status=False,
+    )
+    s.mount("https://", HTTPAdapter(max_retries=retry))
+    s.mount("http://", HTTPAdapter(max_retries=retry))
+    return s
+
+_HTTP = None
+def _get_http():
+    global _HTTP
+    if _HTTP is None:
+        _HTTP = _http_session()
+    return _HTTP
+
+
 _original_print = builtins.print
 
 
@@ -152,7 +176,7 @@ def fetch_with_retry(url: str, max_attempts: int = 6, base_delay: float = 5.0) -
     last_error = None
     for attempt in range(1, max_attempts + 1):
         try:
-            resp = requests.get(url, headers=HEADERS, timeout=20)
+            resp = _get_http().get(url, headers=HEADERS, timeout=(5, 25))
             resp.raise_for_status()
             return resp.text
         except requests.exceptions.RequestException as e:

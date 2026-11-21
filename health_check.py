@@ -81,6 +81,38 @@ def minutes(sec):
 
 
 # ----------------------------------------------------------------- проверки
+
+def _vk_auth_errors_recent(minutes=60) -> int:
+    """Сколько error 5 / authorization failed в vkbot_log за последние N минут."""
+    log = BASE / "vkbot_log.txt"
+    if not log.exists():
+        return 0
+    cutoff = time.time() - minutes * 60
+    # грубо: читаем хвост файла
+    try:
+        with open(log, "rb") as fh:
+            fh.seek(max(0, log.stat().st_size - 2_000_000))
+            tail = fh.read().decode("utf-8", errors="ignore")
+    except Exception:
+        return 0
+    count = 0
+    for line in tail.splitlines():
+        if "error_code': 5" in line or "error_code\": 5" in line or "User authorization failed" in line:
+            count += 1
+    return count
+
+
+def _pending_unresolved_counts():
+    path = BASE / "state.json"
+    if not path.exists():
+        return 0, 0
+    try:
+        s = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return 0, 0
+    return len(s.get("_pending_friendly_matches") or {}), len(s.get("_unresolved_videos") or {})
+
+
 def current_problems():
     """{ключ: (текст, сколько минут ждать до предупреждения)} — то, что не так прямо сейчас."""
     problems = {}
@@ -96,6 +128,14 @@ def current_problems():
             problems["vkbot"] = ("VK-бот не запущен (видео не подхватываются)", 0, "VK-бот снова работает")
     except Exception:
         pass
+    # stability: частые error 5 = токен мёртв
+    auth_errs = _vk_auth_errors_recent(90)
+    if auth_errs >= 15:
+        problems["vk_token"] = (
+            f"VK-токен сыпется (error 5 ×{auth_errs} за ~1.5 ч). Запусти get_vk_token.py",
+            0,
+            "VK-токен снова работает",
+        )
     for key, (name, url) in SITES.items():
         if not reachable(url):
             problems[f"site_{key}"] = (f"{name} не отвечает", SITE_DOWN_MIN, f"{name} снова отвечает")
@@ -177,11 +217,15 @@ def day_summary(day=None):
             tail = fh.read().decode("utf-8", errors="ignore")
         errors = len(re.findall(rf"^\[{day[:5]} [^\]]*\] \[ERROR\]", tail, re.M))
 
+    pending_n, unresolved_n = _pending_unresolved_counts()
+    auth_errs = _vk_auth_errors_recent(24 * 60)
     if not fixtures:
-        return f"🌙 <b>Сводка за {day}</b>\nОфициальных матчей сегодня не было."
+        return (f"🌙 <b>Сводка за {day}</b>\nОфициальных матчей сегодня не было.\n"
+                f"Pending: {pending_n}, unresolved: {unresolved_n}, VK error5 (сутки): {auth_errs}")
     lines = [f"🌙 <b>Сводка за {day}</b>",
              f"Матчей: {len(fixtures)}, с видео: {len(fixtures) - len(without)}, постов дня: {posts}",
-             f"Ошибок в логе расписания: {errors}"]
+             f"Ошибок в логе расписания: {errors}",
+             f"Pending: {pending_n}, unresolved: {unresolved_n}, VK error5 (сутки): {auth_errs}"]
     if without:
         lines.append(f"\nБез видео ({len(without)}):")
         lines += [f"• {w}" for w in without[:15]]
