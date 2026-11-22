@@ -31388,3 +31388,4 @@
 22.11 21:51:00 запуск live_watcher.py
 22.11 21:52:01 запуск live_watcher.py
 22.11 21:52:01 запуск post_schedule.py
+22.11 21:53:00 запуск live_watcher.py
