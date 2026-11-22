@@ -31449,3 +31449,7 @@
 22.11 22:28:00 запуск post_schedule.py
 22.11 22:28:00 запуск live_watcher.py
 22.11 22:29:01 запуск live_watcher.py
+22.11 22:30:00 запуск post_standings.py
+22.11 22:30:00 запуск health_check.py
+22.11 22:30:00 запуск live_watcher.py
+22.11 22:30:00 запуск post_schedule.py
