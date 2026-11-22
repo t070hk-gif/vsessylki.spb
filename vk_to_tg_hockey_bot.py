@@ -140,6 +140,7 @@ def save_state(state: dict) -> None:
 
 # ------------------- УПРАВЛЕНИЕ VK-ТОКЕНОМ (с авто-обновлением) -------------------
 
+
 def load_tokens() -> dict:
     if not TOKEN_FILE.exists():
         raise SystemExit(
@@ -153,63 +154,103 @@ def save_tokens(data: dict) -> None:
     TOKEN_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+import fcntl
+
+_TOKEN_LOCK_FILE = TOKEN_FILE.with_suffix(".lock")
+
+
+def _token_lock():
+    """Контекстный менеджер для файловой блокировки refresh."""
+    class _Lock:
+        def __enter__(self):
+            self.fd = open(_TOKEN_LOCK_FILE, "a+")
+            fcntl.flock(self.fd.fileno(), fcntl.LOCK_EX)
+            return self
+        def __exit__(self, *a):
+            try:
+                fcntl.flock(self.fd.fileno(), fcntl.LOCK_UN)
+                self.fd.close()
+            except Exception:
+                pass
+    return _Lock()
+
+
 def refresh_access_token(tokens: dict) -> dict:
-    """Обменивает refresh_token на новый access_token."""
-    refresh_token = tokens.get("refresh_token")
-    device_id = tokens.get("device_id")
+    """Обменивает refresh_token на новый access_token (с lock и повторными попытками)."""
+    with _token_lock():
+        # Перечитываем с диска — другой процесс мог уже обновить
+        try:
+            disk = load_tokens()
+            if disk.get("refresh_token"):
+                tokens = disk
+        except Exception:
+            pass
 
-    if not refresh_token:
+        refresh_token = tokens.get("refresh_token")
+        device_id = tokens.get("device_id")
+
+        if not refresh_token:
+            send_admin_alert(
+                "VK-бот: в vk_tokens.json нет refresh_token. "
+                "Нужно заново пройти авторизацию через get_vk_token.py"
+            )
+            raise SystemExit("нет refresh_token")
+        if not device_id:
+            send_admin_alert(
+                "VK-бот: в vk_tokens.json нет device_id. "
+                "Заново пройдите авторизацию через get_vk_token.py"
+            )
+            raise SystemExit("нет device_id")
+
+        last_err = None
+        for attempt in range(3):
+            try:
+                resp = requests.post(
+                    VK_TOKEN_REFRESH_URL,
+                    data={
+                        "grant_type": "refresh_token",
+                        "client_id": VK_CLIENT_ID,
+                        "refresh_token": refresh_token,
+                        "device_id": device_id,
+                    },
+                    timeout=15,
+                )
+                new_data = resp.json()
+            except Exception as e:
+                last_err = e
+                time.sleep(1.5 * (attempt + 1))
+                continue
+
+            if resp.status_code == 200 and "access_token" in new_data:
+                # Сохраняем новый refresh_token, если VK его вернул
+                if "refresh_token" not in new_data:
+                    new_data["refresh_token"] = refresh_token
+                new_data.setdefault("device_id", device_id)
+                print(f"[VK] Токен обновлён (attempt {attempt+1}), expires_in={new_data.get('expires_in')}")
+                save_tokens(new_data)
+                return new_data
+
+            last_err = new_data
+            # Если refresh_token уже использован — перечитываем файл
+            if attempt < 2:
+                time.sleep(1.0)
+                try:
+                    disk = load_tokens()
+                    if disk.get("refresh_token") and disk["refresh_token"] != refresh_token:
+                        tokens = disk
+                        refresh_token = tokens["refresh_token"]
+                        device_id = tokens.get("device_id", device_id)
+                        continue
+                except Exception:
+                    pass
+            time.sleep(1.5 * (attempt + 1))
+
         send_admin_alert(
-            "VK-бот остановлен: в vk_tokens.json нет refresh_token. "
-            "Нужно заново пройти авторизацию через get_vk_token.py"
+            f"VK-бот: не удалось обновить токен после 3 попыток. "
+            f"Последняя ошибка: {last_err}. Запусти get_vk_token.py"
         )
-        raise SystemExit(
-            "В vk_tokens.json нет refresh_token — нужно заново пройти "
-            "авторизацию через get_vk_token.py"
-        )
-    if not device_id:
-        send_admin_alert(
-            "VK-бот остановлен: в vk_tokens.json нет device_id. "
-            "Заново пройдите авторизацию через get_vk_token.py"
-        )
-        raise SystemExit(
-            "В vk_tokens.json нет device_id — обновление токена невозможно. "
-            "Заново пройдите авторизацию через get_vk_token.py (используйте "
-            "актуальную версию скрипта, которая сохраняет device_id)."
-        )
+        raise SystemExit(f"refresh failed: {last_err}")
 
-    resp = requests.post(
-        VK_TOKEN_REFRESH_URL,
-        data={
-            "grant_type": "refresh_token",
-            "client_id": VK_CLIENT_ID,
-            "refresh_token": refresh_token,
-            "device_id": device_id,
-        },
-        timeout=15,
-    )
-
-    new_data = resp.json()
-
-    if resp.status_code != 200 or "access_token" not in new_data:
-        send_admin_alert(
-            f"VK-бот остановлен: не удалось обновить токен (HTTP {resp.status_code}). "
-            f"Возможно, refresh_token истёк или отозван — заново пройдите "
-            f"авторизацию через get_vk_token.py на компьютере."
-        )
-        raise SystemExit(
-            f"Не удалось обновить токен (HTTP {resp.status_code}).\n"
-            f"Полный ответ сервера: {new_data}\n\n"
-            "Возможно, refresh_token истёк или отозван — заново пройдите "
-            "авторизацию через get_vk_token.py"
-        )
-
-    # На случай если сервер не вернул device_id повторно — сохраняем прежний
-    new_data.setdefault("device_id", device_id)
-
-    print("[VK] Токен успешно обновлён через refresh_token.")
-    save_tokens(new_data)
-    return new_data
 
 
 def _vk_service_key():
@@ -297,10 +338,15 @@ def _vk_api(method: str, params: dict, access_token: str, *,
                 tokens = refresh_access_token(tokens)
                 _VK_TOKENS_REF["tokens"] = tokens
                 token = tokens["access_token"]
-                _time.sleep(1.0)
+                _time.sleep(0.8)
                 continue
-            except SystemExit as e:
-                print(f"[VK auth] refresh не удался: {e}")
+            except SystemExit:
+                key = _vk_service_key()
+                if key:
+                    print(f"[VK auth] {label}: переключаюсь на service_key")
+                    token = key
+                    _time.sleep(0.5)
+                    continue
                 try:
                     notify_admin_once(
                         "vk_token_dead",
