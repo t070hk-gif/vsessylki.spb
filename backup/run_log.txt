@@ -32311,3 +32311,4 @@
 23.11 18:40:00 запуск post_standings.py
 23.11 18:40:00 запуск post_schedule.py
 23.11 18:40:00 запуск live_watcher.py
+23.11 18:41:01 запуск live_watcher.py
