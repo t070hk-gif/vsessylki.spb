@@ -31568,3 +31568,4 @@
 23.11 10:10:00 запуск live_watcher.py
 23.11 10:10:00 запуск post_standings.py
 23.11 10:10:00 запуск post_schedule.py
+23.11 10:11:00 запуск live_watcher.py
