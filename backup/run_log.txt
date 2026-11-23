@@ -32213,3 +32213,5 @@
 23.11 17:42:00 запуск post_schedule.py
 23.11 17:42:00 запуск live_watcher.py
 23.11 17:43:00 запуск live_watcher.py
+23.11 17:44:01 запуск post_schedule.py
+23.11 17:44:01 запуск live_watcher.py
