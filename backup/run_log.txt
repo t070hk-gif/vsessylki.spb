@@ -33373,3 +33373,4 @@
 24.11 20:40:01 запуск health_check.py
 24.11 20:40:01 запуск post_schedule.py
 24.11 20:40:01 запуск post_standings.py
+24.11 20:41:00 запуск live_watcher.py
