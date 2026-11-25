@@ -33663,3 +33663,4 @@
 25.11 10:00:00 запуск post_standings.py
 25.11 10:00:00 запуск festive_avatar.py
 25.11 10:00:00 запуск post_schedule.py
+25.11 10:01:00 запуск live_watcher.py
