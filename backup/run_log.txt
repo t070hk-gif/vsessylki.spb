@@ -34157,3 +34157,5 @@
 25.11 14:50:00 запуск health_check.py
 25.11 14:50:00 запуск live_watcher.py
 25.11 14:51:00 запуск live_watcher.py
+25.11 14:52:00 запуск live_watcher.py
+25.11 14:52:00 запуск post_schedule.py
