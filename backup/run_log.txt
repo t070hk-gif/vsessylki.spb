@@ -34462,3 +34462,4 @@
 26.11 18:30:00 запуск live_watcher.py
 26.11 18:30:00 запуск post_standings.py
 26.11 18:30:00 запуск post_schedule.py
+26.11 18:31:00 запуск live_watcher.py
