@@ -35500,3 +35500,4 @@
 28.11 00:11:00 запуск live_watcher.py
 28.11 00:12:01 запуск live_watcher.py
 28.11 00:12:01 запуск post_schedule.py
+28.11 00:13:00 запуск live_watcher.py
