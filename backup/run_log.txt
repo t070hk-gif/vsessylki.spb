@@ -34700,3 +34700,5 @@
 27.11 11:34:00 запуск post_schedule.py
 27.11 11:34:00 запуск live_watcher.py
 27.11 11:35:00 запуск live_watcher.py
+27.11 11:36:00 запуск post_schedule.py
+27.11 11:36:00 запуск live_watcher.py
