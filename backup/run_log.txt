@@ -35834,3 +35834,5 @@
 28.11 10:40:00 запуск health_check.py
 28.11 10:40:00 запуск live_watcher.py
 28.11 10:41:00 запуск live_watcher.py
+28.11 10:42:00 запуск live_watcher.py
+28.11 10:42:00 запуск post_schedule.py
