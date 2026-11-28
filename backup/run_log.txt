@@ -36090,3 +36090,4 @@
 28.11 15:30:01 запуск post_standings.py
 28.11 15:30:01 запуск live_watcher.py
 28.11 15:30:01 запуск health_check.py
+28.11 15:31:00 запуск live_watcher.py
